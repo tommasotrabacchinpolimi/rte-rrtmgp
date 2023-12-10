@@ -76,7 +76,6 @@ namespace rrtmgp_kernel_launcher_cuda
             const Float* fminor, const int* jeta,
             const Bool* tropo, const int* jtemp,
             Float* tau_rayleigh);
-
     void compute_tau_absorption(
             const int ncol, const int nlay, const int nband, const int ngpt,
             const int ngas, const int nflav, const int neta, const int npres, const int ntemp,
@@ -106,6 +105,7 @@ namespace rrtmgp_kernel_launcher_cuda
             const Float* tlay, const Float* col_gas,
             const int* jeta, const int* jtemp,
             const int* jpress, Float* tau);
+
 
     void Planck_source(
             const int ncol, const int nlay, const int nbnd, const int ngpt,

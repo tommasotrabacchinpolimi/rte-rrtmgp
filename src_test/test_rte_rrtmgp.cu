@@ -693,7 +693,7 @@ void solve_radiation(int argc, char** argv)
         }
     }
 
-    Status::print_message("###### Finished RTE+RRTMGP solver ######");
+    Status::print_message("###### Finished RTE+RRTMGP cuda solver ######");
 }
 
 

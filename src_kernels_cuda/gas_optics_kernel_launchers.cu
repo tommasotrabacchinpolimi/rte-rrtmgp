@@ -8,6 +8,9 @@
 #include "Array.h"
 #include "tuner.h"
 
+#include <chrono>
+
+
 
 namespace
 {
@@ -250,6 +253,8 @@ namespace rrtmgp_kernel_launcher_cuda
     };
 
 
+
+#ifndef SERIAL
     void compute_tau_absorption(
             const int ncol, const int nlay, const int nband, const int ngpt,
             const int ngas, const int nflav, const int neta, const int npres, const int ntemp,
@@ -281,6 +286,14 @@ namespace rrtmgp_kernel_launcher_cuda
             const int* jpress,
             Float* tau)
     {
+
+        int* prova = (int*) malloc(sizeof(int) * 1);
+        cudaError_t err = cudaMemcpy(prova, gpoint_flavor, sizeof(int) * 1, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cout << err << std::endl;
+            std::cout << "execution failed" << std::endl;
+            exit(1);
+        }
         Tuner_map& tunings = Tuner::get_map();
 
         dim3 grid_gpu_maj(ngpt, nlay, ncol);
@@ -331,7 +344,13 @@ namespace rrtmgp_kernel_launcher_cuda
 
         dim3 grid_gpu_min_1(1, 42, 8);
         dim3 block_gpu_min_1(8,1,16);
-
+        #ifdef PROFILE
+            float delta;
+            cudaEvent_t start, stop;
+            cudaEventCreate(&start);
+            cudaEventCreate(&stop);
+            cudaEventRecord(start, 0);
+        #endif
         gas_optical_depths_minor_kernel<8,1,16><<<grid_gpu_min_1, block_gpu_min_1>>>(
                                         ncol, nlay, ngpt,
                                         ngas, nflav, ntemp, neta,
@@ -350,12 +369,21 @@ namespace rrtmgp_kernel_launcher_cuda
                                         fminor, jeta, jtemp,
                                         tropo, tau, nullptr);
 
+        #ifdef PROFILE
+            cudaEventRecord(stop, 0);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&delta, start, stop);
+            std::cout << "elapsed time for cuda kernel (lower): " << delta << std::endl;
+        #endif
+
         // Upper
         idx_tropo = 0;
 
         dim3 grid_gpu_min_2(1, 42, 4);
         dim3 block_gpu_min_2(8,1,32);
-
+        #ifdef PROFILE
+            cudaEventRecord(start, 0);
+        #endif
         gas_optical_depths_minor_kernel<8,1,32><<<grid_gpu_min_2, block_gpu_min_2>>>(
                                     ncol, nlay, ngpt,
                                     ngas, nflav, ntemp, neta,
@@ -374,8 +402,224 @@ namespace rrtmgp_kernel_launcher_cuda
                                     fminor, jeta, jtemp,
                                     tropo, tau, nullptr);
 
+        #ifdef PROFILE
+            cudaEventRecord(stop, 0);
+            cudaEventSynchronize(stop);
+            cudaEventElapsedTime(&delta, start, stop);
+            std::cout << "elapsed time for cuda kernel (upper): " << delta << std::endl;
+        #endif
+
     }
 
+#else
+
+    void* copy_from_gpu(void* source, int size) {
+        void* ret = (void*) malloc(size);
+        cudaError_t err = cudaMemcpy(ret, source, size, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) {
+            std::cout << err << std::endl;
+            std::cout << "execution failed" << std::endl;
+            exit(1);
+        }
+        return ret;
+    }
+
+    void copy_to_gpu(void* source, void* dest, int size) {
+        cudaError_t err = cudaMemcpy(dest, source, size, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) {
+            std::cout << err << std::endl;
+            std::cout << "execution failed" << std::endl;
+            exit(1);
+        }
+    }
+
+    void compute_tau_absorption(
+            const int ncol, const int nlay, const int nband, const int ngpt,
+            const int ngas, const int nflav, const int neta, const int npres, const int ntemp,
+            const int nminorlower, const int nminorklower,
+            const int nminorupper, const int nminorkupper,
+            const int idx_h2o,
+            const int* gpoint_flavor,
+            const int* band_lims_gpt,
+            const Float* kmajor,
+            const Float* kminor_lower,
+            const Float* kminor_upper,
+            const int* minor_limits_gpt_lower,
+            const int* minor_limits_gpt_upper,
+            const Bool* minor_scales_with_density_lower,
+            const Bool* minor_scales_with_density_upper,
+            const Bool* scale_by_complement_lower,
+            const Bool* scale_by_complement_upper,
+            const int* idx_minor_lower,
+            const int* idx_minor_upper,
+            const int* idx_minor_scaling_lower,
+            const int* idx_minor_scaling_upper,
+            const int* kminor_start_lower,
+            const int* kminor_start_upper,
+            const Bool* tropo,
+            const Float* col_mix, const Float* fmajor,
+            const Float* fminor, const Float* play,
+            const Float* tlay, const Float* col_gas,
+            const int* jeta, const int* jtemp,
+            const int* jpress,
+            Float* tau)
+    {
+
+
+
+        Tuner_map& tunings = Tuner::get_map();
+
+        dim3 grid_gpu_maj(ngpt, nlay, ncol);
+        dim3 block_gpu_maj;
+
+        if (tunings.count("gas_optical_depths_major_kernel") == 0)
+        {
+            Float* tau_tmp = Tools_gpu::allocate_gpu<Float>(ngpt*nlay*ncol);
+            std::tie(grid_gpu_maj, block_gpu_maj) =
+               tune_kernel_compile_time<Gas_optical_depths_major_kernel>(
+                    "gas_optical_depths_major_kernel",
+                    dim3(ngpt, nlay, ncol),
+                    std::integer_sequence<unsigned int, 1, 2, 4, 8, 16, 24, 32, 48, 64>{},
+                    std::integer_sequence<unsigned int, 1, 2, 4>{},
+                    std::integer_sequence<unsigned int, 8, 16, 24, 32, 48, 64, 96, 128, 256>{},
+                    ncol, nlay, nband, ngpt,
+                    nflav, neta, npres, ntemp,
+                    gpoint_flavor, band_lims_gpt,
+                    kmajor, col_mix, fmajor, jeta,
+                    tropo, jtemp, jpress,
+                    tau_tmp);
+
+            Tools_gpu::free_gpu<Float>(tau_tmp);
+
+            tunings["gas_optical_depths_major_kernel"].first = grid_gpu_maj;
+            tunings["gas_optical_depths_major_kernel"].second = block_gpu_maj;
+        }
+        else
+        {
+            grid_gpu_maj = tunings["gas_optical_depths_major_kernel"].first;
+            block_gpu_maj = tunings["gas_optical_depths_major_kernel"].second;
+        }
+
+        run_kernel_compile_time<Gas_optical_depths_major_kernel>(
+                std::integer_sequence<unsigned int, 1, 2, 4, 8, 16, 24, 32, 48, 64>{},
+                std::integer_sequence<unsigned int, 1, 2, 4>{},
+                std::integer_sequence<unsigned int, 8, 16, 24, 32, 48, 64, 96, 128, 256>{},
+                grid_gpu_maj, block_gpu_maj,
+                ncol, nlay, nband, ngpt,
+                nflav, neta, npres, ntemp,
+                gpoint_flavor, band_lims_gpt,
+                kmajor, col_mix, fmajor, jeta,
+                tropo, jtemp, jpress,
+                tau);
+
+        // Lower
+        int idx_tropo = 1;
+
+
+
+
+        const int* gpoint_flavor_cpu = (const int*)copy_from_gpu((int*)gpoint_flavor, sizeof(int) * 2 * ngpt);
+        const Float* kminor_lower_cpu = (const Float*)copy_from_gpu((Float*)kminor_lower, sizeof(Float) * ntemp * neta * nminorklower);
+        const Float* kminor_upper_cpu = (const Float*)copy_from_gpu((Float*)kminor_upper, sizeof(Float) * ntemp * neta * nminorkupper);
+        const int* minor_limits_gpt_lower_cpu = (const int*)copy_from_gpu((int*)minor_limits_gpt_lower, sizeof(int) * 2 * nminorlower);
+        const int* minor_limits_gpt_upper_cpu = (const int*)copy_from_gpu((int*)minor_limits_gpt_upper, sizeof(int) * 2 * nminorupper);
+        const Bool* minor_scales_with_density_lower_cpu = (const Bool*)copy_from_gpu((Bool*)minor_scales_with_density_lower, sizeof(Bool) * nminorlower);
+        const Bool* minor_scales_with_density_upper_cpu = (const Bool*)copy_from_gpu((Bool*)minor_scales_with_density_upper, sizeof(Bool) * nminorupper);
+        const Bool* scale_by_complement_lower_cpu = (const Bool*)copy_from_gpu((Bool*)scale_by_complement_lower, sizeof(Bool) * nminorlower);
+        const Bool* scale_by_complement_upper_cpu = (const Bool*)copy_from_gpu((Bool*)scale_by_complement_upper, sizeof(Bool) * nminorupper);
+        const int* idx_minor_lower_cpu = (const int*)copy_from_gpu((int*)idx_minor_lower, sizeof(int) * nminorlower);
+        const int* idx_minor_upper_cpu = (const int*)copy_from_gpu((int*)idx_minor_upper, sizeof(int) * nminorupper);
+        const int* idx_minor_scaling_lower_cpu = (const int*)copy_from_gpu((int*)idx_minor_scaling_lower, sizeof(int) * nminorlower);
+        const int* idx_minor_scaling_upper_cpu = (const int*)copy_from_gpu((int*)idx_minor_scaling_upper, sizeof(int) * nminorupper);
+        const int* kminor_start_lower_cpu = (const int*)copy_from_gpu((int*)kminor_start_lower, sizeof(int) * nminorlower);
+        const int* kminor_start_upper_cpu = (const int*)copy_from_gpu((int*)kminor_start_upper, sizeof(int) * nminorupper);
+        const Float* play_cpu = (const Float*)copy_from_gpu((Float*)play, sizeof(Float) * ncol * nlay);
+        const Float* tlay_cpu = (const Float*)copy_from_gpu((Float*)tlay, sizeof(Float) * ncol * nlay);
+        const Float* col_gas_cpu = (const Float*)copy_from_gpu((Float*)col_gas, sizeof(Float) * ncol * nlay * (ngas + 1));
+        const Float* fminor_cpu = (const Float*)copy_from_gpu((Float*)fminor, sizeof(Float) * 2 * 2 * ncol * nlay * nflav);
+        const int* jeta_cpu = (const int*)copy_from_gpu((int*)jeta, sizeof(int) * 2 * ncol * nlay * nflav);
+        const int* jtemp_cpu = (const int*)copy_from_gpu((int*)jtemp, sizeof(int) * ncol * nlay);
+        const Bool* tropo_cpu = (const Bool*)copy_from_gpu((Bool*)tropo, sizeof(Bool) * ncol * nlay);
+        Float* tau_cpu = (Float*)copy_from_gpu((Float*)tau, sizeof(Float) * ncol * nlay * ngpt);
+
+#ifdef PROFILE
+        auto start = std::chrono::high_resolution_clock::now();
+#endif
+        gas_optical_depths_minor_serial<1,42,8,8,1,16>(ncol, nlay, ngpt,
+                                        ngas, nflav, ntemp, neta,
+                                        nminorlower,
+                                        nminorklower,
+                                        idx_h2o, idx_tropo,
+                                        gpoint_flavor_cpu,
+                                        kminor_lower_cpu,
+                                        minor_limits_gpt_lower_cpu,
+                                        minor_scales_with_density_lower_cpu,
+                                        scale_by_complement_lower_cpu,
+                                        idx_minor_lower_cpu,
+                                        idx_minor_scaling_lower_cpu,
+                                        kminor_start_lower_cpu,
+                                        play_cpu, tlay_cpu, col_gas_cpu,
+                                        fminor_cpu, jeta_cpu, jtemp_cpu,
+                                        tropo_cpu, tau_cpu, nullptr);
+#ifdef PROFILE
+        auto stop = std::chrono::high_resolution_clock::now();
+        std::cout << "elapsed timer for seriel kernel (lower): " << std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count() / 1000.0 << std::endl;
+#endif
+        // Upper
+        idx_tropo = 0;
+
+
+#ifdef PROFILE
+    start = std::chrono::high_resolution_clock::now();
+#endif
+        gas_optical_depths_minor_serial<1,42,4,8,1,32>(ncol, nlay, ngpt,
+                                    ngas, nflav, ntemp, neta,
+                                    nminorupper,
+                                    nminorkupper,
+                                    idx_h2o, idx_tropo,
+                                    gpoint_flavor_cpu,
+                                    kminor_upper_cpu,
+                                    minor_limits_gpt_upper_cpu,
+                                    minor_scales_with_density_upper_cpu,
+                                    scale_by_complement_upper_cpu,
+                                    idx_minor_upper_cpu,
+                                    idx_minor_scaling_upper_cpu,
+                                    kminor_start_upper_cpu,
+                                    play_cpu, tlay_cpu, col_gas_cpu,
+                                    fminor_cpu, jeta_cpu, jtemp_cpu,
+                                    tropo_cpu, tau_cpu, nullptr);
+#ifdef PROFILE
+    stop = std::chrono::high_resolution_clock::now();
+    std::cout << "elapsed timer for serial kernel (lower): " << std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count()  / 1000.0 << std::endl;
+#endif
+
+        copy_to_gpu(tau_cpu, tau, sizeof(Float) * ncol * nlay * ngpt);
+
+        free((void*)gpoint_flavor_cpu);
+        free((void*)kminor_lower_cpu);
+        free((void*)kminor_upper_cpu);
+        free((void*)minor_limits_gpt_lower_cpu);
+        free((void*)minor_limits_gpt_upper_cpu);
+        free((void*)minor_scales_with_density_lower_cpu);
+        free((void*)minor_scales_with_density_upper_cpu);
+        free((void*)scale_by_complement_lower_cpu);
+        free((void*)scale_by_complement_upper_cpu);
+        free((void*)idx_minor_lower_cpu);
+        free((void*)idx_minor_upper_cpu);
+        free((void*)idx_minor_scaling_lower_cpu);
+        free((void*)idx_minor_scaling_upper_cpu);
+        free((void*)kminor_start_lower_cpu);
+        free((void*)kminor_start_upper_cpu);
+        free((void*)play_cpu);
+        free((void*)tlay_cpu);
+        free((void*)col_gas_cpu);
+        free((void*)fminor_cpu);
+        free((void*)jeta_cpu);
+        free((void*)jtemp_cpu);
+        free((void*)tropo_cpu);
+        free((void*)tau_cpu);
+    }
+#endif
 
     void Planck_source(
             const int ncol, const int nlay, const int nbnd, const int ngpt,

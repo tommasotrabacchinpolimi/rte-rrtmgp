@@ -347,6 +347,8 @@ void gas_optical_depths_major_kernel(
     }
 }
 
+
+
 #ifndef kernel_tuner
  #undef block_size_x
 #endif
@@ -522,6 +524,8 @@ void compute_tau_minor_absorption_kernel(
 */
 
 #if use_shared_tau == 0
+
+#ifndef IMPROVED
 template<int block_size_x, int block_size_y, int block_size_z> __global__
 void gas_optical_depths_minor_kernel(
         const int ncol, const int nlay, const int ngpt,
@@ -584,12 +588,14 @@ void gas_optical_depths_minor_kernel(
                                 scaling *= col_gas[idx_collay + idx_minor_scaling[imnr] * ncl] * vmr_fact * dry_fact;
                         }
                     }
+                    //printf("index %d with imnr %d  has scaling %f\n", idx_collay, imnr, scaling);
 
                     scalings[threadIdx.z][threadIdx.y] = scaling;
                 }
                 __syncthreads();
 
                 scaling = scalings[threadIdx.z][threadIdx.y];
+                
 
                 const int gpt_start = minor_limits_gpt[2*imnr]-1;
                 const int gpt_end = minor_limits_gpt[2*imnr+1];
@@ -640,6 +646,244 @@ void gas_optical_depths_minor_kernel(
         }
     }
 }
+
+#else
+#define CACHE_SIZE 50
+template<int block_size_x, int block_size_y, int block_size_z> __global__
+void gas_optical_depths_minor_kernel(
+        const int ncol, const int nlay, const int ngpt,
+        const int ngas, const int nflav, const int ntemp, const int neta,
+        const int nminor,
+        const int nminork,
+        const int idx_h2o, const int idx_tropo,
+        const int* __restrict__ gpoint_flavor,
+        const Float* __restrict__ kminor,
+        const int* __restrict__ minor_limits_gpt,
+        const Bool* __restrict__ minor_scales_with_density,
+        const Bool* __restrict__ scale_by_complement,
+        const int* __restrict__ idx_minor,
+        const int* __restrict__ idx_minor_scaling,
+        const int* __restrict__ kminor_start,
+        const Float* __restrict__ play,
+        const Float* __restrict__ tlay,
+        const Float* __restrict__ col_gas,
+        const Float* __restrict__ fminor,
+        const int* __restrict__ jeta,
+        const int* __restrict__ jtemp,
+        const Bool* __restrict__ tropo,
+        Float* __restrict__ tau,
+        Float* __restrict__ tau_minor)
+{
+    const int ilay = blockIdx.y * block_size_y + threadIdx.y;
+    const int icol = blockIdx.z * block_size_z + threadIdx.z;
+
+    __shared__ Float scalings[block_size_z][block_size_y][CACHE_SIZE];
+    __shared__ int j0_[CACHE_SIZE];
+    __shared__ int j1_[CACHE_SIZE];
+    __shared__ int band_gpt_[CACHE_SIZE];
+    __shared__ int gpt_offset_[CACHE_SIZE];
+    __shared__ int gpt_start_[CACHE_SIZE];
+    __shared__ const Float* kfminor_[CACHE_SIZE];
+
+
+    if ( (icol < ncol) && (ilay < nlay) )
+    {
+        const int idx_collay = icol + ilay*ncol;
+        const Float* kin = &kminor[0];
+        const int kjtemp = jtemp[idx_collay];
+        if (tropo[idx_collay] == idx_tropo)
+        {
+            for(int imnr = threadIdx.x; imnr<nminor && imnr < CACHE_SIZE; imnr += block_size_x) {
+                gpt_start_[imnr] = minor_limits_gpt[2*imnr]-1;
+                const int gpt_end = minor_limits_gpt[2*imnr+1];
+                const int gpt_offs = 1-idx_tropo;
+                const int iflav = gpoint_flavor[2*gpt_start_[imnr] + gpt_offs]-1;
+                const int idx_fcl2 = 2 * 2 * (icol + ilay*ncol + iflav*ncol*nlay);
+                const int idx_fcl1 = 2 * (icol + ilay*ncol + iflav*ncol*nlay);
+                kfminor_[imnr] = &fminor[idx_fcl2];
+                j0_[imnr] = jeta[idx_fcl1];
+                j1_[imnr] = jeta[idx_fcl1+1];
+                band_gpt_[imnr] = gpt_end-gpt_start_[imnr];
+                gpt_offset_[imnr] = kminor_start[imnr]-1;
+
+
+
+                Float scaling = Float(0.);
+                const int ncl = ncol * nlay;
+                scaling = col_gas[idx_collay + idx_minor[imnr] * ncl];
+
+                if (minor_scales_with_density[imnr])
+                {
+                    const Float PaTohPa = 0.01;
+                    scaling *= PaTohPa * play[idx_collay] / tlay[idx_collay];
+
+                    if (idx_minor_scaling[imnr] > 0)
+                    {
+                        const int idx_collaywv = icol + ilay*ncol + idx_h2o*ncl;
+                        Float vmr_fact = Float(1.) / col_gas[idx_collay];
+                        Float dry_fact = Float(1.) / (Float(1.) + col_gas[idx_collaywv] * vmr_fact);
+
+                        if (scale_by_complement[imnr])
+                            scaling *= (Float(1.) - col_gas[idx_collay + idx_minor_scaling[imnr] * ncl] * vmr_fact * dry_fact);
+                        else
+                            scaling *= col_gas[idx_collay + idx_minor_scaling[imnr] * ncl] * vmr_fact * dry_fact;
+                    }
+                }
+                scalings[threadIdx.z][threadIdx.y][imnr] = scaling;
+            }
+
+            __syncthreads();
+
+            for (int imnr=0; imnr<nminor; ++imnr)
+            {
+
+                Float scaling = scalings[threadIdx.z][threadIdx.y][imnr];
+                /*
+                const int gpt_start = minor_limits_gpt[2*imnr]-1;
+                const int gpt_end = minor_limits_gpt[2*imnr+1];
+                const int gpt_offs = 1-idx_tropo;
+                const int iflav = gpoint_flavor[2*gpt_start + gpt_offs]-1;
+
+                const int idx_fcl2 = 2 * 2 * (icol + ilay*ncol + iflav*ncol*nlay);
+                const int idx_fcl1 = 2 * (icol + ilay*ncol + iflav*ncol*nlay);
+
+                const Float* kfminor = &fminor[idx_fcl2];
+                const Float* kin = &kminor[0];
+
+                const int j0 = jeta[idx_fcl1];
+                const int j1 = jeta[idx_fcl1+1];
+                const int kjtemp = jtemp[idx_collay];
+                const int band_gpt = gpt_end-gpt_start;
+                const int gpt_offset = kminor_start[imnr]-1;
+                 */
+
+                if constexpr (block_size_x == 16)
+                {
+                    if (threadIdx.x < band_gpt_[imnr])
+                    {
+                        const int igpt = threadIdx.x;
+
+                        Float ltau_minor = kfminor_[imnr][0] * kin[(kjtemp-1) + (j0_[imnr]-1)*ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][1] * kin[(kjtemp-1) +  j0_[imnr]   *ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][2] * kin[kjtemp     + (j1_[imnr]-1)*ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][3] * kin[kjtemp     +  j1_[imnr]   *ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta];
+
+                        const int idx_out = icol + ilay*ncol + (igpt+gpt_start_[imnr])*ncol*nlay;
+                        tau[idx_out] += ltau_minor * scaling;
+                    }
+                }
+                else
+                {
+                    for (int igpt=threadIdx.x; igpt<band_gpt_[imnr]; igpt+=block_size_x)
+                    {
+                        Float ltau_minor = kfminor_[imnr][0] * kin[(kjtemp-1) + (j0_[imnr]-1)*ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][1] * kin[(kjtemp-1) +  j0_[imnr]   *ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][2] * kin[kjtemp     + (j1_[imnr]-1)*ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta] +
+                                        kfminor_[imnr][3] * kin[kjtemp     +  j1_[imnr]   *ntemp + (igpt+gpt_offset_[imnr])*ntemp*neta];
+
+                        const int idx_out = icol + ilay*ncol + (igpt+gpt_start_[imnr])*ncol*nlay;
+                        tau[idx_out] += ltau_minor * scaling;
+                    }
+                }
+            }
+        }
+    }
+}
+#endif
+
+
+//naive serial
+template<int grid_size_x, int grid_size_y, int grid_size_z, int block_size_x, int block_size_y, int block_size_z>
+    void gas_optical_depths_minor_serial(
+    const int ncol, const int nlay, const int ngpt,
+    const int ngas, const int nflav, const int ntemp, const int neta,
+    const int nminor,
+    const int nminork,
+    const int idx_h2o, const int idx_tropo,
+    const int* __restrict__ gpoint_flavor,
+    const Float* __restrict__ kminor,
+    const int* __restrict__ minor_limits_gpt,
+    const Bool* __restrict__ minor_scales_with_density,
+    const Bool* __restrict__ scale_by_complement,
+    const int* __restrict__ idx_minor,
+    const int* __restrict__ idx_minor_scaling,
+    const int* __restrict__ kminor_start,
+    const Float* __restrict__ play,
+    const Float* __restrict__ tlay,
+    const Float* __restrict__ col_gas,
+    const Float* __restrict__ fminor,
+    const int* __restrict__ jeta,
+    const int* __restrict__ jtemp,
+    const Bool* __restrict__ tropo,
+    Float* __restrict__ tau,
+    Float* __restrict__ tau_minor)
+{
+
+for(int ilay = 0; ilay < nlay && ilay < grid_size_y * block_size_y; ilay++) {
+    for(int icol = 0; icol < ncol && icol < grid_size_z * block_size_z; icol++) {
+        Float scaling = 0.0;
+        const int idx_collay = icol + ilay*ncol;
+        if (tropo[idx_collay] == idx_tropo) {
+            for (int imnr = 0; imnr < nminor; ++imnr) {
+                const int ncl = ncol * nlay;
+                scaling = col_gas[idx_collay + idx_minor[imnr] * ncl];
+
+                if (minor_scales_with_density[imnr]) {
+                    const Float PaTohPa = 0.01;
+                    scaling *= PaTohPa * play[idx_collay] / tlay[idx_collay];
+
+                    if (idx_minor_scaling[imnr] > 0) {
+                        const int idx_collaywv = idx_collay + idx_h2o * ncl;
+                        Float vmr_fact = Float(1.) / col_gas[idx_collay];
+                        Float dry_fact = Float(1.) / (Float(1.) + col_gas[idx_collaywv] * vmr_fact);
+
+                        if (scale_by_complement[imnr])
+                            scaling *= (Float(1.) -
+                                        col_gas[idx_collay + idx_minor_scaling[imnr] * ncl] * vmr_fact * dry_fact);
+                        else
+                            scaling *= col_gas[idx_collay + idx_minor_scaling[imnr] * ncl] * vmr_fact * dry_fact;
+                    }
+                }
+
+
+                const int gpt_start = minor_limits_gpt[2 * imnr] - 1;
+                const int gpt_end = minor_limits_gpt[2 * imnr + 1];
+                const int gpt_offs = 1 - idx_tropo;
+                const int iflav = gpoint_flavor[2 * gpt_start + gpt_offs] - 1;
+
+                const int idx_fcl2 = 2 * 2 * (idx_collay + iflav * ncol * nlay);
+                const int idx_fcl1 = 2 * (idx_collay + iflav * ncol * nlay);
+
+                const Float *kfminor = &fminor[idx_fcl2];
+                const Float *kin = &kminor[0];
+
+                const int j0 = jeta[idx_fcl1];
+                const int j1 = jeta[idx_fcl1 + 1];
+                const int kjtemp = jtemp[idx_collay];
+                const int band_gpt = gpt_end - gpt_start;
+                const int gpt_offset = kminor_start[imnr] - 1;
+
+                for (int igpt = 0; igpt < band_gpt; igpt += 1) {
+                    Float ltau_minor =
+                            kfminor[0] * kin[(kjtemp - 1) + (j0 - 1) * ntemp + (igpt + gpt_offset) * ntemp * neta] +
+                            kfminor[1] * kin[(kjtemp - 1) + j0 * ntemp + (igpt + gpt_offset) * ntemp * neta] +
+                            kfminor[2] * kin[kjtemp + (j1 - 1) * ntemp + (igpt + gpt_offset) * ntemp * neta] +
+                            kfminor[3] * kin[kjtemp + j1 * ntemp + (igpt + gpt_offset) * ntemp * neta];
+
+                    const int idx_out = idx_collay + (igpt + gpt_start) * ncol * nlay;
+                    tau[idx_out] += ltau_minor * scaling;
+                    if(ltau_minor*scaling !=0.0) {
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+}
+
+
 #endif
 
 

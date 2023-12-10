@@ -49,6 +49,24 @@ else()
   message(STATUS "CUDA: Disabled.")
 endif()
 
+#Switch to the serial version
+if(SERIAL STREQUAL "on")
+  message(STATUS "Serial version.")
+  add_definitions("-DSERIAL")
+endif()
+
+#Switch to the improved version
+if(IMPROVED STREQUAL "on")
+  message(STATUS "Improved version.")
+  add_definitions("-DIMPROVED")
+endif()
+
+#Enable kernel profiling
+if(PROFILE STREQUAL "on")
+  message(STATUS "Profiling enabled.")
+  add_definitions("-DPROFILE")
+endif()
+
 # Only set the compiler flags when the cache is created
 # to enable editing of the flags in the CMakeCache.txt file.
 if(NOT HASCACHE)

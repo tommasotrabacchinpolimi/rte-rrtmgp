@@ -1074,7 +1074,6 @@ void Gas_optics_rrtmgp_gpu::compute_gas_taus(
 
         rrtmgp_kernel_launcher_cuda::zero_array(ncol, nlay, ngpt, tau.ptr());
         rrtmgp_kernel_launcher_cuda::zero_array(ncol, nlay, ngpt, tau_rayleigh.ptr());
-
         rrtmgp_kernel_launcher_cuda::compute_tau_absorption(
                 ncol, nlay, nband, ngpt,
                 ngas, nflav, neta, npres, ntemp,
@@ -1104,6 +1103,7 @@ void Gas_optics_rrtmgp_gpu::compute_gas_taus(
                 jeta.ptr(), jtemp.ptr(), jpress.ptr(),
                 tau.ptr());
 
+
         rrtmgp_kernel_launcher_cuda::compute_tau_rayleigh(
                 ncol, nlay, nband, ngpt,
                 ngas, nflav, neta, npres, ntemp,
@@ -1120,7 +1120,6 @@ void Gas_optics_rrtmgp_gpu::compute_gas_taus(
     else
     {
         rrtmgp_kernel_launcher_cuda::zero_array(ncol, nlay, ngpt, optical_props->get_tau().ptr());
-
         rrtmgp_kernel_launcher_cuda::compute_tau_absorption(
                 ncol, nlay, nband, ngpt,
                 ngas, nflav, neta, npres, ntemp,
@@ -1149,6 +1148,7 @@ void Gas_optics_rrtmgp_gpu::compute_gas_taus(
                 play.ptr(), tlay.ptr(), col_gas.ptr(),
                 jeta.ptr(), jtemp.ptr(), jpress.ptr(),
                 optical_props->get_tau().ptr());
+
     }
 }
 

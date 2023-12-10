@@ -1,43 +1,42 @@
-# C++ interface of RTE+RRTMGP
+# Computation of radiative fluxes challenge
+This is the implementation of the second challenge of the Parallel Computing course at Politecnico di Milano. \
+The first task was to rewrite in C serial code the `gas_optical_depths_minor` kernel. which can be found at /content/rte-rrtmgp-cpp/src_kernels_cuda/gas_optics_kernels.cu. The kernel is launched twice in the `compute_tau_absorption` function in /content/rte-rrtmgp-cpp/src_kernels_cuda/gas_optics_kernel_launchers.cu \
+The second task was to find a way to improve the performance of the application with respect to the serial baseline.
 
-[![Build Status](https://travis-ci.org/earth-system-radiation/rte-rrtmgp-cpp.svg?branch=master)](https://travis-ci.org/earth-system-radiation/rte-rrtmgp-cpp)
+## Compilation instructions
+To compile the following instruction must be followed:
 
-This is a C++ interface to the Radiative Transfer for Energetics (RTE)
-and Rapid Radiative Transfer Model for GCM applications Parallel (RRTMGP).
+    mkdir build 
+    cd build
+    cmake .. -DSYST=ubuntu -DUSECUDA=on -DSERIAL=<on|off> -DIMPROVED=<on|off> -DPROFILE=<on|off>
 
-The original code is found at https://github.com/earth-system-radiation/rte-rrtmgp.
+The application must be compiled specifying all the following options:
+* ``` -DSERIAL ``` : must be set to 'on' to compile the serial version of the kernel
+* ``` -DIMPROVED ``` : must be set to 'on' to compile the optimized version of the kernel. Note that this option has no effect if the ``` -DSERIAL ``` option is set to on.
+* ``` -DPROFILE ``` : must be set to on to profile the execution time of the kernel and to print the results.
 
-Contacts: Robert Pincus and Eli Mlawer
-email: rrtmgp@aer.com
+And finally:
 
-This C++ interface can be downloaded from https://github.com/earth-system-radiation/rte-rrtmgp-cpp
+    make
 
-Contact: Chiel van Heerwaarden
-email: chiel.vanheerwaarden@wur.nl
+## Execution instructions
+To run the application is necessary to do the following:
 
-Use and duplication is permitted under the terms of the
-BSD 3-clause license, see http://opensource.org/licenses/BSD-3-Clause
+    cd ../allsky
+    ./make_links.sh
+    python allsky_init.py
+    python allsky_run_cuda.py
 
-The source code of the testing executable in the `src_test` and
-`include_test` directory is released under the GPLv3 license,
-see https://www.gnu.org/licenses/gpl-3.0.en.html
+To verify the accuracy of the results, the following python script can be used:
 
-In order to check out the code including the `rte-rrtmgp` submodule, use:
+    python compare-to-reference.py
 
-    git clone --recurse-submodules https://github.com/earth-system-radiation/rte-rrtmgp-cpp
+A correct implementation shall have a maximum percent difference with respect to reference data of the order of 10^-7.
 
-In case you had already checked out the repository, use:
+## Relevant files
+The file modified to do the tasks of this challenge are
+* the kernel source [file](src_kernels_cuda/gas_optics_kernels.cu)
+* the kernel launcher [file](src_kernels_cuda/gas_optics_kernel_launchers.cu)
 
-    git submodule update --init
-
-
-# Basic instructions
-Building the source creates an executable `test_rte_rrtmgp`.
-Three test cases are provided in directories `rfmip`, `allsky`, and `rcemip`.
-In order to run those cases follow the instructions in the `README.md` of those respective directories.
-
-In general, in order to run a test case, make sure the following files are present in the
-directory from which `test_rte_rrtmgp` is triggered:
-1. Input file `rte_rrtmgp_input.nc` with atmospheric profiles of pressure, temperature, and gases.
-2. Long wave coefficients file from original RTE+RRTMGP repository (in `rrtmgp/data`) as `coefficients_lw.nc`
-3. Short wave coefficients file from original RTE+RRTMGP repository (in `rrtmgp/data`) as `coefficients_sw.nc`
+## Original repository
+The original repository can be found [here](https://github.com/microhh/rte-rrtmgp-cpp)

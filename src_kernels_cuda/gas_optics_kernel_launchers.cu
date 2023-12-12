@@ -590,7 +590,7 @@ namespace rrtmgp_kernel_launcher_cuda
                                     tropo_cpu, tau_cpu, nullptr);
 #ifdef PROFILE
     stop = std::chrono::high_resolution_clock::now();
-    std::cout << "elapsed timer for serial kernel (lower): " << std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count()  / 1000.0 << std::endl;
+    std::cout << "elapsed timer for serial kernel (upper): " << std::chrono::duration_cast<std::chrono::microseconds>(stop - start).count()  / 1000.0 << std::endl;
 #endif
 
         copy_to_gpu(tau_cpu, tau, sizeof(Float) * ncol * nlay * ngpt);
